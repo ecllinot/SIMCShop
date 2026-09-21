@@ -1,0 +1,35 @@
+# Gradle build output and caches
+.gradle/
+build/
+
+# Loom/Fabric local runtime output
+run/
+*.launch
+
+# Compiled Java artifacts
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+
+# IDE/editor local settings
+.idea/
+.vscode/
+*.iml
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Local environment overrides
+.env
+.env.*
+!.env.example

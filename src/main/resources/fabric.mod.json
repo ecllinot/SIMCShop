@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "smcshop",
+  "version": "${version}",
+  "name": "SMCShop",
+  "description": "Collect and search public shop sign data.",
+  "authors": ["ecllinot"],
+  "license": "MIT",
+  "icon": "assets/smcshop/icon.png",
+  "environment": "client",
+  "entrypoints": { "client": ["com.example.smcshop.SmcShopClient"] },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
