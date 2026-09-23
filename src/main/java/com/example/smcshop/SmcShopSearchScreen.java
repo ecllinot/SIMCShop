@@ -8,13 +8,14 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.input.KeyInput;
 import net.minecraft.text.Text;
+import net.minecraft.util.math.BlockPos;
 
 import java.util.ArrayList;
 import java.util.List;
 
 final class SmcShopSearchScreen extends Screen {
     private static final int HEADER_HEIGHT = 78;
-    private static final int ROW_HEIGHT = 36;
+    private static final int ROW_HEIGHT = 52;
     private static final int SIDE_PADDING = 18;
 
     private TextFieldWidget searchBox;
@@ -71,6 +72,12 @@ final class SmcShopSearchScreen extends Screen {
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
+        BlockPos shop = coordinateAt(click.x(), click.y());
+        if (shop != null) {
+            SmcShopClient.highlightShop(shop);
+            this.status = "已标记坐标：" + shop.getX() + ", " + shop.getY() + ", " + shop.getZ();
+            return true;
+        }
         String port = portAt(click.x(), click.y());
         if (port != null) {
             MinecraftClient.getInstance().keyboard.setClipboard(port);
@@ -78,6 +85,24 @@ final class SmcShopSearchScreen extends Screen {
             return true;
         }
         return super.mouseClicked(click, doubled);
+    }
+
+    private BlockPos coordinateAt(double mouseX, double mouseY) {
+        int contentWidth = Math.min(560, this.width - SIDE_PADDING * 2);
+        int left = (this.width - contentWidth) / 2;
+        int listTop = HEADER_HEIGHT;
+        int listBottom = this.height - 18;
+        if (mouseX < left || mouseX > left + contentWidth || mouseY < listTop || mouseY > listBottom) return null;
+        int index = scroll + ((int) mouseY - listTop) / ROW_HEIGHT;
+        if (index < 0 || index >= results.size()) return null;
+        ShopResult shop = results.get(index);
+        int rowY = listTop + (index - scroll) * ROW_HEIGHT;
+        String ownerPrefix = shop.owner() + " | ";
+        String coords = shop.x() + ", " + shop.y() + ", " + shop.z();
+        int coordsLeft = left + contentWidth / 2 + this.textRenderer.getWidth(ownerPrefix);
+        int coordsRight = coordsLeft + this.textRenderer.getWidth(coords);
+        return mouseX >= coordsLeft && mouseX <= coordsRight && mouseY >= rowY + 31 && mouseY <= rowY + 48
+            ? new BlockPos(shop.x(), shop.y(), shop.z()) : null;
     }
 
     @Override
@@ -119,13 +144,18 @@ final class SmcShopSearchScreen extends Screen {
         String price = "$" + SmcShopClient.trimPrice(shop.price());
         String amount = shop.amount() == 0 ? "缺货" : "x" + shop.amount();
         String coords = shop.x() + ", " + shop.y() + ", " + shop.z();
-        String port = shop.nearestPort().isBlank() ? "" : " | " + shop.nearestPort() + "[" + shop.nearestPortDistance() + "m]";
 
         context.drawTextWithShadow(this.textRenderer, shop.item(), x + 10, y + 6, 0xFFFFFFFF);
         context.drawTextWithShadow(this.textRenderer, shop.typeLabel() + " " + price + " " + amount, x + 10, y + 20, accent);
-        context.drawTextWithShadow(this.textRenderer, shop.owner() + " | " + coords + port, x + width / 2, y + 20, 0xFFD8D8D8);
+        String ownerPrefix = shop.owner() + " | ";
+        context.drawTextWithShadow(this.textRenderer, ownerPrefix, x + width / 2, y + 34, 0xFFD8D8D8);
+        context.drawTextWithShadow(this.textRenderer, coords, x + width / 2 + this.textRenderer.getWidth(ownerPrefix), y + 34, 0xFFFFD27A);
         if (!shop.nearestPort().isBlank()) {
-            context.drawTextWithShadow(this.textRenderer, "复制港口", x + width - 54, y + 6, 0xFF62C7D8);
+            int portCenter = x + width - 34;
+            context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("复制港口"), portCenter, y + 4, 0xFF62C7D8);
+            context.drawCenteredTextWithShadow(this.textRenderer, Text.literal(shop.nearestPort()), portCenter, y + 18, 0xFFB7EAF0);
+            context.drawCenteredTextWithShadow(this.textRenderer,
+                Text.literal("[" + shop.nearestPortDistance() + "m]"), portCenter, y + 32, 0xFF9FD6DC);
         }
     }
 
@@ -141,9 +171,9 @@ final class SmcShopSearchScreen extends Screen {
         ShopResult shop = results.get(index);
         if (shop.nearestPort().isBlank()) return null;
         int rowY = listTop + (index - scroll) * ROW_HEIGHT;
-        int copyLeft = right - 58;
+        int copyLeft = right - 72;
         int copyRight = right - 4;
-        return mouseX >= copyLeft && mouseX <= copyRight && mouseY >= rowY + 3 && mouseY <= rowY + 18 ? shop.nearestPort() : null;
+        return mouseX >= copyLeft && mouseX <= copyRight && mouseY >= rowY + 2 && mouseY <= rowY + 47 ? shop.nearestPort() : null;
     }
 
     private void setType(String nextType) {
@@ -179,7 +209,7 @@ final class SmcShopSearchScreen extends Screen {
                     return;
                 }
                 results = shops;
-                status = item + " 找到 " + shops.size() + " 家商店";
+                status = item + " 找到 " + shops.size() + " 家商店，点击坐标高亮";
             });
         });
     }

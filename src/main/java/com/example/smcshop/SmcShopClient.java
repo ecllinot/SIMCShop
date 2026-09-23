@@ -13,12 +13,14 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.client.render.DrawStyle;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.debug.gizmo.GizmoDrawing;
 import org.lwjgl.glfw.GLFW;
 
 import java.net.URI;
@@ -52,6 +54,7 @@ public final class SmcShopClient implements ClientModInitializer {
     private static final Pattern STOCK = Pattern.compile("^(出售|收购)\\s+(\\d+)$");
     private static int tick;
     private static boolean targetServer;
+    private static BlockPos highlightedShop;
 
     @Override
     public void onInitializeClient() {
@@ -71,7 +74,9 @@ public final class SmcShopClient implements ClientModInitializer {
                 fingerprints.clear();
             }
             targetServer = currentTarget;
+            clearHighlightWhenArrived(client);
             if (!targetServer) return;
+            refreshHighlight(client);
             if (++tick % 100 == 0) scan(client);
             if (tick % 400 == 0) upload();
         });
@@ -95,6 +100,26 @@ public final class SmcShopClient implements ClientModInitializer {
                     .executes(context -> search(context.getSource().getClient(), StringArgumentType.getString(context, "item"), "SELL"))))
                 .then(literal("buy").then(argument("item", StringArgumentType.greedyString())
                     .executes(context -> search(context.getSource().getClient(), StringArgumentType.getString(context, "item"), "BUY"))))));
+    }
+
+    static void highlightShop(BlockPos pos) {
+        highlightedShop = pos.toImmutable();
+    }
+
+    private static void clearHighlightWhenArrived(MinecraftClient client) {
+        if (highlightedShop == null || client.player == null || client.world == null) return;
+        if (!targetServer || client.player.getBlockPos().getSquaredDistance(highlightedShop) <= 2.0) {
+            highlightedShop = null;
+        }
+    }
+
+    private static void refreshHighlight(MinecraftClient client) {
+        if (highlightedShop == null || client.world == null || client.player == null) return;
+        try (var scope = client.newGizmoScope()) {
+            GizmoDrawing.box(highlightedShop, DrawStyle.stroked(0xFFF4A340, 4.0F))
+                .ignoreOcclusion()
+                .withLifespan(100);
+        }
     }
 
     private static boolean isTargetServer(MinecraftClient client) {
