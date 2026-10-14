@@ -37,6 +37,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
@@ -46,6 +48,8 @@ public final class SmcShopClient implements ClientModInitializer {
     private static final Gson GSON = new Gson();
     private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private static final String API = System.getenv().getOrDefault("SMCSHOP_API_URL", "https://shop.whalemc.com");
+    private static final String MOD_VERSION = "1.0.3";
+    private static final Logger LOGGER = LoggerFactory.getLogger("SMCShop");
     private static final int SEARCH_LIMIT = 80;
     private static KeyBinding openSearchKey;
     private static final Map<String, String> fingerprints = new HashMap<>();
@@ -55,9 +59,13 @@ public final class SmcShopClient implements ClientModInitializer {
     private static int tick;
     private static boolean targetServer;
     private static BlockPos highlightedShop;
+    private static String uploadToken;
+    private static boolean tokenRequestInFlight;
+    private static int nextTokenRequestTick;
 
     @Override
     public void onInitializeClient() {
+        ShopPriceTooltip.register();
         openSearchKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.smcshop.open_search",
             InputUtil.Type.KEYSYM,
@@ -76,6 +84,7 @@ public final class SmcShopClient implements ClientModInitializer {
             targetServer = currentTarget;
             clearHighlightWhenArrived(client);
             if (!targetServer) return;
+            if (uploadToken == null && !tokenRequestInFlight && tick >= nextTokenRequestTick) requestUploadToken();
             refreshHighlight(client);
             if (++tick % 100 == 0) scan(client);
             if (tick % 400 == 0) upload();
@@ -122,7 +131,7 @@ public final class SmcShopClient implements ClientModInitializer {
         }
     }
 
-    private static boolean isTargetServer(MinecraftClient client) {
+    static boolean isTargetServer(MinecraftClient client) {
         ServerInfo info = client.getCurrentServerEntry();
         if (info == null) return false;
         String name = info.name == null ? "" : info.name;
@@ -181,13 +190,77 @@ public final class SmcShopClient implements ClientModInitializer {
 
     private static synchronized void upload() {
         if (queue.isEmpty()) return;
+        if (uploadToken == null || uploadToken.isBlank()) {
+            uploadToken = null;
+            requestUploadToken();
+            return;
+        }
         ArrayList<JsonObject> batch = new ArrayList<>(queue.subList(0, Math.min(50, queue.size())));
         queue.subList(0, batch.size()).clear();
         JsonObject body = new JsonObject();
         body.add("shops", GSON.toJsonTree(batch));
         HttpRequest request = HttpRequest.newBuilder(URI.create(API + "/api/shops/batch"))
-            .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body))).build();
-        HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString()).exceptionally(error -> null);
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer " + uploadToken)
+            .header("X-SMCShop-Client-Version", MOD_VERSION)
+            .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
+            .build();
+        HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenAccept(response -> {
+            if (response.statusCode() == 429) {
+                MinecraftClient.getInstance().execute(() -> {
+                    queue.addAll(0, batch);
+                    nextTokenRequestTick = tick + 400;
+                });
+            } else if (response.statusCode() == 401 || response.statusCode() == 403) {
+                MinecraftClient.getInstance().execute(() -> {
+                    queue.addAll(0, batch);
+                    uploadToken = null;
+                    nextTokenRequestTick = tick + 100;
+                });
+            }
+        }).exceptionally(error -> {
+            MinecraftClient.getInstance().execute(() -> queue.addAll(0, batch));
+            return null;
+        });
+    }
+
+    private static synchronized void requestUploadToken() {
+        if (tokenRequestInFlight) return;
+        tokenRequestInFlight = true;
+        JsonObject body = new JsonObject();
+        body.addProperty("clientVersion", MOD_VERSION);
+        HttpRequest request = HttpRequest.newBuilder(URI.create(API + "/api/client/token"))
+            .header("Content-Type", "application/json")
+            .header("X-SMCShop-Client-Version", MOD_VERSION)
+            .timeout(Duration.ofSeconds(8))
+            .POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body)))
+            .build();
+        HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
+            MinecraftClient.getInstance().execute(() -> {
+                tokenRequestInFlight = false;
+                if (error != null || response == null || response.statusCode() < 200 || response.statusCode() >= 300) {
+                    if (error != null) LOGGER.warn("Upload token request failed", error);
+                    else if (response != null) LOGGER.warn("Upload token request failed with HTTP {}", response.statusCode());
+                    nextTokenRequestTick = tick + 200;
+                    return;
+                }
+                try {
+                    JsonObject root = JsonParser.parseString(response.body()).getAsJsonObject();
+                    String issuedToken = getString(root, "token");
+                    if (issuedToken.isBlank()) {
+                        uploadToken = null;
+                        LOGGER.warn("Upload token response did not contain a token");
+                        nextTokenRequestTick = tick + 200;
+                        return;
+                    }
+                    uploadToken = issuedToken;
+                } catch (RuntimeException exception) {
+                    uploadToken = null;
+                    LOGGER.warn("Could not parse upload token response", exception);
+                    nextTokenRequestTick = tick + 200;
+                }
+            });
+        });
     }
 
     private static int openSearchGui(MinecraftClient client) {
@@ -216,7 +289,12 @@ public final class SmcShopClient implements ClientModInitializer {
     }
 
     static CompletableFuture<List<ShopResult>> queryShops(String item, String type, int limit) {
+        return queryShops(item, type, limit, false);
+    }
+
+    static CompletableFuture<List<ShopResult>> queryShops(String item, String type, int limit, boolean exact) {
         StringBuilder url = new StringBuilder(API).append("/api/shops?limit=").append(limit);
+        if (exact) url.append("&exact=true");
         if (item != null && !item.isBlank()) {
             url.append("&item=").append(URLEncoder.encode(item.trim(), java.nio.charset.StandardCharsets.UTF_8));
         }
